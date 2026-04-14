@@ -4,10 +4,10 @@ import argparse
 import logging
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--media-file", type=Path, help="Media file used when --camera-source file")
     parser.add_argument("--stream-id", default="test_publish", help="Stream id to publish")
+    parser.add_argument("--stream-name", help="Optional broadcast name")
+    parser.add_argument("--api-token", help="Token used for application REST calls")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless")
     parser.add_argument(
         "--verify-tls",
@@ -51,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="If > 0, keep publishing for this many seconds; otherwise wait until Ctrl+C",
+    )
+    parser.add_argument(
+        "--skip-create-broadcast",
+        action="store_true",
+        help="Skip the REST broadcast create call before opening the publish page",
     )
     return parser.parse_args()
 
@@ -64,17 +71,62 @@ def build_config(args: argparse.Namespace) -> TestConfig:
         media_file=args.media_file,
         headless=args.headless,
         verify_tls=args.verify_tls,
+        rest_api_token=args.api_token,
     )
 
 
-def prepare_fake_capture_file(media_file: Path) -> tuple[Path, Path | None]:
+def create_broadcast(config: TestConfig, stream_id: str, stream_name: str | None) -> dict:
+    token = config.rest_api_token
+    if not token:
+        raise ValueError("--api-token is required unless --skip-create-broadcast is set")
+
+    headers = {
+        "Authorization": token if token.lower().startswith("bearer ") else f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"streamId": stream_id}
+    if stream_name:
+        payload["name"] = stream_name
+
+    candidate_urls = [
+        f"{config.normalized_server_url}/{config.application}/rest/v2/broadcast/create",
+        f"{config.normalized_server_url}/{config.application}/rest/v2/broadcasts/create",
+    ]
+    last_error = ""
+    for url in candidate_urls:
+        logger.info("Creating broadcast via %s", url)
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=30, verify=config.verify_tls)
+        except requests.RequestException as exc:
+            last_error = str(exc)
+            continue
+
+        if response.ok:
+            return response.json() if response.content else {"success": True}
+
+        if response.status_code in {404, 405}:
+            last_error = f"HTTP {response.status_code} at {url}"
+            continue
+
+        body = response.text.strip()
+        if len(body) > 300:
+            body = body[:297] + "..."
+        raise AssertionError(f"Broadcast create failed at {url}: HTTP {response.status_code} {body}")
+
+    raise AssertionError(f"Broadcast create could not be completed. Last error: {last_error}")
+
+
+def prepare_fake_capture_file(media_file: Path) -> Path:
     suffix = media_file.suffix.lower()
     if suffix in {".y4m", ".mjpeg", ".mjpg", ".jpeg", ".jpg"}:
-        return media_file.resolve(), None
+        return media_file.resolve()
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="webrtc_capture_"))
-    temp_capture_file = temp_dir / f"{media_file.stem}.mjpeg"
-    logger.info("Converting %s to temporary MJPEG capture file %s", media_file, temp_capture_file)
+    mjpeg_file = media_file.with_suffix(".mjpeg")
+    if mjpeg_file.exists() and mjpeg_file.stat().st_mtime >= media_file.stat().st_mtime:
+        logger.info("Reusing cached MJPEG capture file: %s", mjpeg_file)
+        return mjpeg_file.resolve()
+
+    logger.info("Converting %s to cached MJPEG capture file %s", media_file, mjpeg_file)
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -88,10 +140,10 @@ def prepare_fake_capture_file(media_file: Path) -> tuple[Path, Path | None]:
         "3",
         "-f",
         "mjpeg",
-        str(temp_capture_file),
+        str(mjpeg_file),
     ]
     subprocess.run(command, check=True, timeout=600)
-    return temp_capture_file.resolve(), temp_dir
+    return mjpeg_file.resolve()
 
 
 def build_browser(config: TestConfig, fake_capture_file: Path | None):
@@ -118,14 +170,16 @@ def main() -> int:
             raise FileNotFoundError(f"Media file not found: {args.media_file}")
 
     config = build_config(args)
-    temp_dir = None
     fake_capture_file = None
     if args.camera_source == "file":
-        fake_capture_file, temp_dir = prepare_fake_capture_file(args.media_file)
+        fake_capture_file = prepare_fake_capture_file(args.media_file)
     browser = build_browser(config, fake_capture_file)
     page = StreamAppPage(browser, config)
 
     try:
+        if not args.skip_create_broadcast:
+            create_broadcast(config, args.stream_id, args.stream_name)
+
         logger.info("Opening publish page")
         page.open_publish_page(args.stream_id)
 
@@ -150,10 +204,6 @@ def main() -> int:
         except Exception as exc:
             logger.warning("Could not stop publishing cleanly: %s", exc)
         browser.quit()
-        if temp_dir is not None:
-            for path in temp_dir.iterdir():
-                path.unlink(missing_ok=True)
-            temp_dir.rmdir()
 
     return 0
 
