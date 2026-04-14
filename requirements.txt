@@ -1,0 +1,6 @@
+pytest>=8.0
+requests>=2.31
+selenium>=4.18
+Pillow>=10.0
+pytesseract>=0.3.10
+
