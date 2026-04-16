@@ -77,6 +77,42 @@ def test_authenticate_reports_unreachable_server_url() -> None:
         client.authenticate()
 
 
+def test_authenticate_is_skipped_when_rest_api_token_is_configured() -> None:
+    client = _client(_response(500, b'{"success": false}'))
+    client.config = Config(
+        server_url=client.config.server_url,
+        user="",
+        password="",
+        rest_api_token="token-value",
+    )
+
+    assert client.authenticate() == {"success": True, "auth": "token"}
+
+    assert isinstance(client.session, StaticSession)
+    assert client.session.requests == []
+
+
+def test_authenticate_uses_panel_credentials_even_when_rest_api_token_is_configured() -> None:
+    client = _client(_response(200, b'{"success": true}'))
+    client.config = Config(
+        server_url=client.config.server_url,
+        user="user@example.test",
+        password="secret",
+        rest_api_token="token-value",
+    )
+
+    client.authenticate()
+
+    assert isinstance(client.session, StaticSession)
+    assert client.session.requests == [
+        (
+            "POST",
+            "https://server.example.test/rest/v2/users/authenticate",
+            {"json": {"email": "user@example.test", "password": "5ebe2294ecd0e0f08eab7690d2a6ee69"}},
+        ),
+    ]
+
+
 def test_request_first_success_includes_response_body_forbidden_detail() -> None:
     client = _client(_response(403, b'{"message": "User is not authorized"}'))
 
@@ -104,6 +140,69 @@ def test_application_settings_use_management_settings_path_first() -> None:
     assert isinstance(client.session, StaticSession)
     assert client.session.requests == [
         ("GET", "https://server.example.test/rest/v2/applications/settings/live", {}),
+    ]
+
+
+def test_rest_api_token_is_sent_to_management_rest_paths() -> None:
+    client = _client(_response(200, b'{"applications": ["live"]}'))
+    client.config = Config(
+        server_url=client.config.server_url,
+        user="",
+        password="",
+        rest_api_token="token-value",
+    )
+
+    client.applications()
+
+    assert isinstance(client.session, StaticSession)
+    assert client.session.requests == [
+        (
+            "GET",
+            "https://server.example.test/rest/v2/applications",
+            {"headers": {"Authorization": "Bearer token-value"}},
+        ),
+    ]
+
+
+def test_rest_api_token_uses_application_rest_paths() -> None:
+    client = _client(_response(200, b'{"streamId": "stream1"}'))
+    client.config = Config(
+        server_url=client.config.server_url,
+        user="",
+        password="",
+        rest_api_token="Bearer already-prefixed",
+    )
+
+    client.create_broadcast("stream1")
+
+    assert isinstance(client.session, StaticSession)
+    assert client.session.requests == [
+        (
+            "POST",
+            "https://server.example.test/live/rest/v2/broadcasts/create",
+            {"headers": {"Authorization": "Bearer already-prefixed"}, "json": {"streamId": "stream1"}},
+        ),
+    ]
+
+
+def test_application_settings_use_application_rest_paths_first_when_token_is_configured() -> None:
+    client = _client(_response(200, b'{"settings": true}'))
+    client.config = Config(
+        server_url=client.config.server_url,
+        user="",
+        password="",
+        rest_api_token="token-value",
+    )
+
+    client.get_application_settings()
+
+    assert isinstance(client.session, StaticSession)
+    assert client.session.requests == [
+        (
+            "GET",
+            "https://server.example.test/live/rest/v2/app-settings",
+            {"headers": {"Authorization": "Bearer token-value"}},
+        ),
     ]
 
 

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import requests
 from selenium import webdriver
+from selenium.common.exceptions import SessionNotCreatedException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -42,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stream-id", default="test_publish", help="Stream id to publish")
     parser.add_argument("--stream-name", help="Optional broadcast name")
     parser.add_argument("--api-token", help="Token used for application REST calls")
+    parser.add_argument("--chrome-binary", help="Optional explicit Chrome/Chromium binary path")
+    parser.add_argument("--chromedriver-binary", help="Optional explicit chromedriver binary path")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless")
     parser.add_argument(
         "--verify-tls",
@@ -87,6 +93,32 @@ def create_broadcast(config: TestConfig, stream_id: str, stream_name: str | None
     payload = {"streamId": stream_id}
     if stream_name:
         payload["name"] = stream_name
+
+    lookup_urls = [
+        f"{config.normalized_server_url}/{config.application}/rest/v2/broadcast/{stream_id}",
+        f"{config.normalized_server_url}/{config.application}/rest/v2/broadcasts/{stream_id}",
+    ]
+    for url in lookup_urls:
+        logger.info("Checking existing broadcast via %s", url)
+        try:
+            response = requests.get(url, headers=headers, timeout=30, verify=config.verify_tls)
+        except requests.RequestException:
+            continue
+
+        if response.ok:
+            try:
+                data = response.json() if response.content else {}
+            except ValueError:
+                data = {}
+            if data:
+                logger.info("Broadcast already exists for stream id %s, skipping create", stream_id)
+                return data
+
+        if response.status_code not in {404, 405}:
+            body = response.text.strip()
+            if len(body) > 300:
+                body = body[:297] + "..."
+            raise AssertionError(f"Broadcast lookup failed at {url}: HTTP {response.status_code} {body}")
 
     candidate_urls = [
         f"{config.normalized_server_url}/{config.application}/rest/v2/broadcast/create",
@@ -146,19 +178,63 @@ def prepare_fake_capture_file(media_file: Path) -> Path:
     return mjpeg_file.resolve()
 
 
-def build_browser(config: TestConfig, fake_capture_file: Path | None):
+def build_browser(
+    config: TestConfig,
+    fake_capture_file: Path | None,
+    chrome_binary_override: str | None,
+    chromedriver_binary_override: str | None,
+):
     options = Options()
+    temp_root = Path(tempfile.mkdtemp(prefix="chrome_runtime_", dir="/tmp"))
+    data_path = temp_root / "data"
+    cache_dir = temp_root / "cache"
+    data_path.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    chrome_binary = (
+        chrome_binary_override
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+    )
+    if chrome_binary:
+        options.binary_location = chrome_binary
+        logger.info("Using Chrome binary: %s", chrome_binary)
     if config.headless:
         options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
     options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--use-fake-ui-for-media-stream")
+    options.add_argument("--remote-debugging-port=0")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1280,720")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-setuid-sandbox")
+    options.add_argument("--disable-crash-reporter")
+    options.add_argument("--disable-breakpad")
+    options.add_argument(f"--data-path={data_path}")
+    options.add_argument(f"--disk-cache-dir={cache_dir}")
+    options.add_argument("--enable-logging")
+    options.add_argument("--v=1")
     if fake_capture_file is not None:
         options.add_argument("--use-fake-device-for-media-stream")
         logger.info("Using fake WebRTC capture file: %s", fake_capture_file)
         options.add_argument(f"--use-file-for-fake-video-capture={fake_capture_file}")
     options.add_argument("--ignore-certificate-errors")
     options.add_argument("--no-sandbox")
-    return webdriver.Chrome(options=options)
+    chromedriver_log = temp_root / "chromedriver.log"
+    service = Service(executable_path=chromedriver_binary_override, log_output=str(chromedriver_log))
+    try:
+        return webdriver.Chrome(service=service, options=options), temp_root
+    except SessionNotCreatedException as exc:
+        details = ""
+        if chromedriver_log.exists():
+            details = chromedriver_log.read_text(encoding="utf-8", errors="replace")[-4000:]
+        raise AssertionError(
+            "Chrome session could not be created. "
+            f"ChromeDriver log: {chromedriver_log}\n{details}"
+        ) from exc
 
 
 def main() -> int:
@@ -173,7 +249,12 @@ def main() -> int:
     fake_capture_file = None
     if args.camera_source == "file":
         fake_capture_file = prepare_fake_capture_file(args.media_file)
-    browser = build_browser(config, fake_capture_file)
+    browser, temp_root = build_browser(
+        config,
+        fake_capture_file,
+        args.chrome_binary,
+        args.chromedriver_binary,
+    )
     page = StreamAppPage(browser, config)
 
     try:
@@ -204,6 +285,7 @@ def main() -> int:
         except Exception as exc:
             logger.warning("Could not stop publishing cleanly: %s", exc)
         browser.quit()
+        shutil.rmtree(temp_root, ignore_errors=True)
 
     return 0
 

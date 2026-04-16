@@ -22,7 +22,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--media-file", default=os.getenv("TESTKIT_MEDIA_FILE"), help="Timestamped MP4 test source")
     parser.addoption("--rtmp-endpoint", default=os.getenv("TESTKIT_RTMP_ENDPOINT"), help="Remote RTMP endpoint")
     parser.addoption("--snapshot-dir", default=os.getenv("TESTKIT_SNAPSHOT_DIR"), help="Server-side snapshot directory")
-    parser.addoption("--rest-api-token", default=os.getenv("TESTKIT_REST_API_TOKEN"), help="JWT token for application REST endpoints")
+    parser.addoption("--rest-api-token", default=os.getenv("TESTKIT_REST_API_TOKEN"), help="JWT token for Ant Media REST endpoints")
     parser.addoption("--duration-seconds", default=os.getenv("TESTKIT_DURATION_SECONDS", "60"), help="Default duration")
     parser.addoption("--stress-streams", default=os.getenv("TESTKIT_STRESS_STREAMS", "32"), help="Stress stream count")
     parser.addoption("--stress-hours", default=os.getenv("TESTKIT_STRESS_HOURS", "1"), help="Stress duration in hours")
@@ -30,24 +30,54 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--headless", action="store_true", help="Run Chrome headless")
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    has_token = bool(config.getoption("rest_api_token"))
+    has_panel_credentials = bool(config.getoption("user")) and bool(config.getoption("password"))
+    if not has_token or has_panel_credentials:
+        return
+
+    skip_panel_auth = pytest.mark.skip(
+        reason="requires panel username/password auth and management REST endpoints; app REST token is not sufficient"
+    )
+    for item in items:
+        if item.get_closest_marker("panel_auth"):
+            item.add_marker(skip_panel_auth)
+
+
 @pytest.fixture(scope="session")
 def config(pytestconfig: pytest.Config) -> TestConfig:
-    required = ["server_url", "user", "password"]
+    required = ["server_url"]
+    if not pytestconfig.getoption("rest_api_token"):
+        required.extend(["user", "password"])
     missing = [name for name in required if not pytestconfig.getoption(name)]
     if missing:
         pytest.fail("Missing required option(s): " + ", ".join(f"--{name.replace('_', '-')}" for name in missing))
     os.environ["TESTKIT_SERVER_URL"] = pytestconfig.getoption("server_url")
-    os.environ["TESTKIT_USER"] = pytestconfig.getoption("user")
-    os.environ["TESTKIT_PASSWORD"] = pytestconfig.getoption("password")
     os.environ["TESTKIT_APPLICATION"] = pytestconfig.getoption("application")
+    if pytestconfig.getoption("user"):
+        os.environ["TESTKIT_USER"] = pytestconfig.getoption("user")
+    else:
+        os.environ.pop("TESTKIT_USER", None)
+    if pytestconfig.getoption("password"):
+        os.environ["TESTKIT_PASSWORD"] = pytestconfig.getoption("password")
+    else:
+        os.environ.pop("TESTKIT_PASSWORD", None)
     if pytestconfig.getoption("media_file"):
         os.environ["TESTKIT_MEDIA_FILE"] = pytestconfig.getoption("media_file")
+    else:
+        os.environ.pop("TESTKIT_MEDIA_FILE", None)
     if pytestconfig.getoption("rtmp_endpoint"):
         os.environ["TESTKIT_RTMP_ENDPOINT"] = pytestconfig.getoption("rtmp_endpoint")
+    else:
+        os.environ.pop("TESTKIT_RTMP_ENDPOINT", None)
     if pytestconfig.getoption("snapshot_dir"):
         os.environ["TESTKIT_SNAPSHOT_DIR"] = pytestconfig.getoption("snapshot_dir")
+    else:
+        os.environ.pop("TESTKIT_SNAPSHOT_DIR", None)
     if pytestconfig.getoption("rest_api_token"):
         os.environ["TESTKIT_REST_API_TOKEN"] = pytestconfig.getoption("rest_api_token")
+    else:
+        os.environ.pop("TESTKIT_REST_API_TOKEN", None)
     os.environ["TESTKIT_DURATION_SECONDS"] = str(pytestconfig.getoption("duration_seconds"))
     os.environ["TESTKIT_STRESS_STREAMS"] = str(pytestconfig.getoption("stress_streams"))
     os.environ["TESTKIT_STRESS_HOURS"] = str(pytestconfig.getoption("stress_hours"))
@@ -61,7 +91,8 @@ def config(pytestconfig: pytest.Config) -> TestConfig:
 @pytest.fixture(scope="session")
 def api(config: TestConfig) -> ServerClient:
     client = ServerClient(config)
-    client.authenticate()
+    if config.user and config.password:
+        client.authenticate()
     return client
 
 

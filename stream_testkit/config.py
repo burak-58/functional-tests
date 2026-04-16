@@ -49,8 +49,8 @@ def env_config() -> TestConfig:
     snapshot_dir = os.getenv("TESTKIT_SNAPSHOT_DIR")
     return TestConfig(
         server_url=os.environ["TESTKIT_SERVER_URL"],
-        user=os.environ["TESTKIT_USER"],
-        password=os.environ["TESTKIT_PASSWORD"],
+        user=os.getenv("TESTKIT_USER", ""),
+        password=os.getenv("TESTKIT_PASSWORD", ""),
         application=os.getenv("TESTKIT_APPLICATION", "live"),
         media_file=Path(media_file) if media_file else None,
         rtmp_endpoint=os.getenv("TESTKIT_RTMP_ENDPOINT"),

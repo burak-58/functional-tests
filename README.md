@@ -18,6 +18,49 @@ sudo apt-get install -y ffmpeg tesseract-ocr google-chrome-stable
 
 Selenium Manager, bundled with Selenium 4, will resolve the Chrome driver automatically.
 
+## Docker
+
+Build an image with the runtime dependencies, then mount this repository into the container so the tests still run from your host checkout:
+
+```bash
+docker build -t vsmediatest-runner .
+```
+
+Run the full suite from the mounted repo:
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  vsmediatest-runner \
+  ". /etc/profile >/dev/null 2>&1 || true; python main.py \
+    --server-url https://SERVER_HOST:5443 \
+    --user admin@example.com \
+    --password 'panel-password' \
+    --application live \
+    --media-file /workspace/media/sample-timestamped.mp4"
+```
+
+Run a single pytest target:
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  -e AUTH_TOKEN \
+  vsmediatest-runner \
+  "pytest tests/test_02_01_rtmp_transcoding.py \
+    --server-url https://SERVER_HOST:5443 \
+    --rest-api-token \"$AUTH_TOKEN\" \
+    --media-file /workspace/media/sample-timestamped.mp4"
+```
+
+Notes:
+
+- The code under test comes from the bind-mounted host directory, not from the image.
+- The image already contains Python, `ffmpeg`, `tesseract`, and `google-chrome-stable`.
+- Selenium Manager resolves the driver inside the container at runtime.
+
 ## Run Everything
 
 ```bash

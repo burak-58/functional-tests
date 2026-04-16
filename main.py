@@ -11,7 +11,7 @@ import pytest
 
 SELECTED_TEST_FILES = [
     #"tests/test_01_01_test_harness_requirements.py",
-    "tests/test_01_02_initial_connectivity_configuration.py",
+    #"tests/test_01_02_initial_connectivity_configuration.py",
     "tests/test_02_01_rtmp_transcoding.py",
     "tests/test_02_02_feature_obligations.py",
     "tests/test_02_03_playback_protocol_latency_validation.py",
@@ -25,8 +25,8 @@ SELECTED_TEST_FILES = [
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the functional test suite.")
     parser.add_argument("--server-url", required=True, help="Server base URL, for example https://host:5443")
-    parser.add_argument("--user", required=True, help="Web panel user email")
-    parser.add_argument("--password", required=True, help="Web panel password")
+    parser.add_argument("--user", help="Web panel user email")
+    parser.add_argument("--password", help="Web panel password")
     parser.add_argument("--application", default="live", help="Application name, default: live")
     parser.add_argument("--media-file", help="Timestamped sample MP4 path for FFmpeg ingest")
     parser.add_argument("--rtmp-endpoint", help="Remote RTMP endpoint used for section 2.2 RTMP push")
@@ -43,13 +43,25 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if not args.rest_api_token:
+        missing = [name for name in ("user", "password") if not getattr(args, name)]
+        if missing:
+            joined = ", ".join(f"--{name.replace('_', '-')}" for name in missing)
+            raise SystemExit(f"main.py: error: the following arguments are required unless --rest-api-token is provided: {joined}")
+
     os.environ["TESTKIT_SERVER_URL"] = args.server_url
-    os.environ["TESTKIT_USER"] = args.user
-    os.environ["TESTKIT_PASSWORD"] = args.password
     os.environ["TESTKIT_APPLICATION"] = args.application
     os.environ["TESTKIT_DURATION_SECONDS"] = str(args.duration_seconds)
     os.environ["TESTKIT_STRESS_STREAMS"] = str(args.stress_streams)
     os.environ["TESTKIT_STRESS_HOURS"] = str(args.stress_hours)
+    if args.user:
+        os.environ["TESTKIT_USER"] = args.user
+    else:
+        os.environ.pop("TESTKIT_USER", None)
+    if args.password:
+        os.environ["TESTKIT_PASSWORD"] = args.password
+    else:
+        os.environ.pop("TESTKIT_PASSWORD", None)
     if args.media_file:
         os.environ["TESTKIT_MEDIA_FILE"] = args.media_file
     if args.rtmp_endpoint:

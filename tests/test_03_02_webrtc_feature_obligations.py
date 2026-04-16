@@ -94,6 +94,7 @@ def test_03_02_webrtc_push_endpoint_can_be_attached(api: ServerClient, config: T
 
 @pytest.mark.webrtc
 @pytest.mark.slow
+@pytest.mark.panel_auth
 def test_03_02_webrtc_png_snapshots_are_created(api: ServerClient, config: TestConfig, browser) -> None:
     settings = api.get_application_settings()
     preview_period_ms = int(settings.get("createPreviewPeriod", 0) or 5000)

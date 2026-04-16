@@ -56,11 +56,17 @@ def test_02_01_1080p_ingest_generates_audio_and_silenced_variants(api: ServerCli
         manifest = wait_for_manifest(adaptive_url, verify_tls=config.verify_tls)
         heights = variant_heights(manifest)
         assert not is_media_playlist(manifest), (
-            "Expected an adaptive HLS master playlist with 360p/540p/720p/1080p variants, "
+            "Expected an adaptive HLS master playlist with lower-bitrate adaptive variants, "
             "but server returned a single media playlist. Check adaptive bitrate/transcoding settings.\n"
             f"Manifest URL: {adaptive_url}\n"
             f"Manifest summary:\n{manifest_summary(manifest)}"
         )
-        assert {360, 540, 720, 1080}.issubset(heights), f"Missing expected variants. Found heights: {sorted(heights)}"
+        assert {360, 540, 720}.issubset(heights), (
+            "Missing expected adaptive variants. "
+            "The source/full-audio rendition is already validated via the main HLS playlist, "
+            "so the adaptive master only needs to include the transcoded ladder.\n"
+            f"Found heights: {sorted(heights)}"
+        )
+        assert max(heights) <= 1080, f"Adaptive master exposed an unexpected rendition above source height: {sorted(heights)}"
     finally:
         stop_process(process)

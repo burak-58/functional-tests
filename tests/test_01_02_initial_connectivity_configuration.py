@@ -15,12 +15,14 @@ from stream_testkit.rest_client import ServerClient
 
 
 @pytest.mark.env
+@pytest.mark.panel_auth
 def test_01_02_authenticate_and_application_exists(api: ServerClient, config: TestConfig) -> None:
     applications = api.applications()
     assert config.application in applications
 
 
 @pytest.mark.env
+@pytest.mark.panel_auth
 def test_01_02_system_settings_and_gpu_stats_available(api: ServerClient) -> None:
     settings = api.system_settings()
     resources = api.system_resources()
@@ -30,6 +32,7 @@ def test_01_02_system_settings_and_gpu_stats_available(api: ServerClient) -> Non
 
 
 @pytest.mark.env
+@pytest.mark.panel_auth
 def test_01_02_live_application_settings_can_be_read_and_updated(api: ServerClient) -> None:
     settings = api.get_application_settings()
     assert isinstance(settings, dict)

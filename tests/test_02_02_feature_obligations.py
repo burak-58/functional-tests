@@ -84,6 +84,7 @@ def test_02_02_rtmp_push_endpoint_can_be_attached(api: ServerClient, config: Tes
 
 @pytest.mark.rtmp
 @pytest.mark.slow
+@pytest.mark.panel_auth
 def test_02_02_png_snapshots_are_created(api: ServerClient, config: TestConfig) -> None:
     if not config.media_file:
         pytest.skip("--media-file is required for PNG snapshot verification")
