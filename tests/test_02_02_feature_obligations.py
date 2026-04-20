@@ -51,6 +51,20 @@ def _preview_changed(previous: dict[str, str | int], current: dict[str, str | in
     return any(current[key] != previous[key] for key in ("signature", "last_modified", "etag", "content_length"))
 
 
+def _recording_candidate_urls(config: TestConfig, stream_id: str) -> list[str]:
+    return [
+        f"{config.hls_base_url}/{stream_id}.mp4",
+        f"{config.hls_base_url}/{stream_id}-muted.mp4",
+        f"{config.hls_base_url}/{stream_id}_360p800kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}_540p1200kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}_720p2000kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}_1080p2500kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}-muted_360p800kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}-muted_540p1200kbps.mp4",
+        f"{config.hls_base_url}/{stream_id}-muted_720p2000kbps.mp4",
+    ]
+
+
 @pytest.mark.rtmp
 @pytest.mark.slow
 def test_02_02_rtmp_push_endpoint_can_be_attached(api: ServerClient, config: TestConfig) -> None:
@@ -185,30 +199,31 @@ def test_02_02_recording_created_for_ingested_stream(api: ServerClient, config: 
         pytest.skip("--media-file is required for recording verification")
     stream_id = f"streamtest_02_02_recording_{uuid.uuid4().hex[:8]}"
     api.create_broadcast(stream_id, "2.2 Recording")
-    recording_urls = [
-        f"{config.hls_base_url}/{stream_id}.mp4",
-        f"{config.hls_base_url}/{stream_id}-muted.mp4",
-    ]
+    recording_urls = _recording_candidate_urls(config, stream_id)
     process = start_rtmp_ingest(config.media_file, f"{config.rtmp_base_url}/{stream_id}", video_bitrate="6000k", resolution="1920:1080", fps=30)
     try:
         _wait_for_broadcast(api, stream_id, application=config.application)
         time.sleep(10)
     finally:
         stop_process(process)
-    for recording_url in recording_urls:
-        deadline = time.time() + 60
-        last_error = ""
-        while time.time() < deadline:
+    time.sleep(5)
+    deadline = time.time() + 90
+    observations: dict[str, str] = {}
+    while time.time() < deadline:
+        for recording_url in recording_urls:
             try:
                 response = requests.get(recording_url, timeout=10, verify=config.verify_tls)
                 if response.ok and response.headers.get("Content-Type", "").lower().startswith(("video/", "application/octet-stream")) and response.content:
-                    break
-                last_error = (
+                    logger.info("Recording became available for %s at %s", stream_id, recording_url)
+                    return
+                observations[recording_url] = (
                     f"HTTP {response.status_code}, content-type={response.headers.get('Content-Type')!r}, "
                     f"size={len(response.content)}"
                 )
             except requests.RequestException as exc:
-                last_error = str(exc)
-            time.sleep(2)
-        else:
-            raise AssertionError(f"No MP4 recording became available for {stream_id} at {recording_url}. Last error: {last_error}")
+                observations[recording_url] = str(exc)
+        time.sleep(2)
+    raise AssertionError(
+        f"No MP4 recording became available for {stream_id}. "
+        f"Tried URLs: {observations}"
+    )
